@@ -1,81 +1,140 @@
-import { useMemo, useState } from 'react'
-import { campaigns as initialCampaigns } from '../data/demoData.js'
+﻿import { useEffect, useState } from 'react'
+import { apiRequest } from '../api/client.js'
 import { useRole } from '../context/useRole.js'
-import { useToast } from '../context/useToast.js'
-import { PageHeader, StatusBadge } from '../components/ui.jsx'
-import { Icon } from '../components/Icon.jsx'
+import { campaignCategories, categoryToCreatorType } from '../data/marketplaceOptions.js'
+import { EmptyState, PageHeader, StatusBadge } from '../components/ui.jsx'
 
-const filters = ['All campaigns', 'In progress', 'Reviewing', 'Draft', 'Completed']
+const initialForm = {
+  name: '',
+  productCategory: '',
+  objective: '',
+  minFollowers: '',
+  maxFollowers: '',
+  budget: '',
+}
 
 export function CampaignsPage() {
   const { role } = useRole()
-  const { notify } = useToast()
-  const [campaignList, setCampaignList] = useState(initialCampaigns)
-  const [filter, setFilter] = useState('All campaigns')
+  const [campaigns, setCampaigns] = useState([])
+  const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [campaignName, setCampaignName] = useState('')
-  const [objective, setObjective] = useState('')
-  const [budget, setBudget] = useState('')
+  const [form, setForm] = useState(initialForm)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [busyCampaignId, setBusyCampaignId] = useState('')
 
-  const visibleCampaigns = useMemo(() => filter === 'All campaigns' ? campaignList : campaignList.filter((campaign) => campaign.status === filter), [campaignList, filter])
+  useEffect(() => {
+    let active = true
+    apiRequest('/campaigns')
+      .then(({ campaigns: items }) => {
+        if (active) setCampaigns(items)
+      })
+      .catch((requestError) => {
+        if (active) setError(requestError.message || 'Could not load campaigns.')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [])
 
-  function createCampaign(event) {
-    event.preventDefault()
-    const created = {
-      id: `camp-${Date.now()}`,
-      name: campaignName.trim(),
-      objective,
-      creators: 0,
-      reach: '—',
-      budget: budget ? `$${Number(budget).toLocaleString()}` : '$0',
-      status: 'Draft',
-      progress: 0,
-      due: 'Not set',
-      color: 'slate',
-    }
-    setCampaignList((current) => [created, ...current])
-    setCampaignName('')
-    setObjective('')
-    setBudget('')
-    setShowForm(false)
-    setFilter('All campaigns')
-    notify('Campaign draft created in this session.')
+  const creatorType = categoryToCreatorType[form.productCategory]
+  const isBrand = role === 'Brand'
+  const title = role === 'Admin' ? 'Platform campaigns' : role === 'Creator' ? 'Open campaigns' : 'Campaigns'
+
+  function updateForm(event) {
+    setForm((current) => ({ ...current, [event.target.name]: event.target.value }))
   }
 
-  return (
-    <>
-      <PageHeader eyebrow={role === 'Creator' ? 'Your partnerships' : 'Campaign management'} title={role === 'Creator' ? 'Collaborations' : 'Campaigns'} description={role === 'Creator' ? 'Track invitations, briefs, deliverables, and completed work.' : 'Create campaigns and manage creator partnerships from brief to completion.'} action={role === 'Creator' ? undefined : 'Create campaign'} onAction={() => setShowForm(true)} />
+  async function createCampaign(event) {
+    event.preventDefault()
+    setError('')
+    setSaving(true)
+    const body = {
+      ...form,
+      minFollowers: Number(form.minFollowers),
+      maxFollowers: Number(form.maxFollowers),
+      budget: form.budget === '' ? null : Number(form.budget),
+    }
+    try {
+      const { campaign } = await apiRequest('/campaigns', { method: 'POST', body })
+      setCampaigns((current) => [campaign, ...current])
+      setForm(initialForm)
+      setShowForm(false)
+    } catch (requestError) {
+      setError(requestError.message || 'Could not create the campaign.')
+    } finally {
+      setSaving(false)
+    }
+  }
 
-      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[['Total campaigns', campaignList.length], ['In progress', campaignList.filter((item) => item.status === 'In progress').length], ['Creators engaged', campaignList.reduce((total, item) => total + item.creators, 0)], ['Total investment', '$40,400']].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-200/80 bg-white p-4"><p className="text-[10px] font-medium text-slate-500">{label}</p><p className="mt-2 text-xl font-semibold tracking-tight text-slate-900">{value}</p></div>)}
-      </div>
+  async function changeStatus(campaign, status) {
+    setError('')
+    setBusyCampaignId(campaign.id)
+    try {
+      const { campaign: updated } = await apiRequest('/campaigns/' + campaign.id + '/status', {
+        method: 'PATCH',
+        body: { status },
+      })
+      setCampaigns((current) => current.map((item) => item.id === updated.id ? updated : item))
+    } catch (requestError) {
+      setError(requestError.message || 'Could not update campaign status.')
+    } finally {
+      setBusyCampaignId('')
+    }
+  }
 
-      <div className="rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.025)]">
-        <div className="flex flex-col justify-between gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:px-5">
-          <div className="flex flex-wrap gap-1.5">{filters.map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-lg px-3 py-2 text-[10px] font-semibold transition ${filter === item ? 'bg-violet-50 text-violet-700' : 'text-slate-500 hover:bg-slate-50'}`}>{item}</button>)}</div>
-          <button className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-medium text-slate-600 hover:bg-slate-50 sm:self-auto" onClick={() => notify('Date range filtering will use campaign API data.') }><Icon name="calendar" size={14} />Date range</button>
-        </div>
-        {visibleCampaigns.length === 0 ? <div className="p-10 text-center text-xs text-slate-500">No campaigns match this status.</div> : <div className="overflow-x-auto"><table className="w-full min-w-[770px] text-left">
-          <thead><tr className="bg-slate-50/70 text-[9px] font-semibold uppercase tracking-[0.11em] text-slate-400"><th className="px-5 py-3">Campaign</th><th className="px-4 py-3">Progress</th><th className="px-4 py-3">Creators</th><th className="px-4 py-3">Reach</th><th className="px-4 py-3">Budget</th><th className="px-4 py-3">Status</th><th className="px-5 py-3">Due date</th></tr></thead>
-          <tbody className="divide-y divide-slate-100">{visibleCampaigns.map((campaign) => <tr key={campaign.id} className="hover:bg-slate-50/60">
-            <td className="px-5 py-4"><p className="text-[11px] font-semibold text-slate-800">{campaign.name}</p><p className="mt-1 text-[9px] text-slate-400">{campaign.objective}</p></td>
-            <td className="px-4 py-4"><div className="flex items-center gap-2"><div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500" style={{ width: `${campaign.progress}%` }} /></div><span className="text-[9px] text-slate-500">{campaign.progress}%</span></div></td>
-            <td className="px-4 py-4 text-[10px] text-slate-600">{campaign.creators}</td><td className="px-4 py-4 text-[10px] text-slate-600">{campaign.reach}</td><td className="px-4 py-4 text-[10px] font-medium text-slate-700">{campaign.budget}</td><td className="px-4 py-4"><StatusBadge status={campaign.status} /></td><td className="px-5 py-4 text-[10px] text-slate-500">{campaign.due}</td>
-          </tr>)}</tbody>
-        </table></div>}
-        <div className="border-t border-slate-100 px-5 py-3 text-[10px] text-slate-400">Showing {visibleCampaigns.length} of {campaignList.length} campaigns</div>
-      </div>
+  return <>
+    <PageHeader
+      eyebrow={role === 'Admin' ? 'Administration' : role === 'Creator' ? 'Marketplace' : 'Brand workspace'}
+      title={title}
+      description={role === 'Creator'
+        ? 'Open campaigns are published by brands and ready for creator matching.'
+        : role === 'Admin'
+          ? 'Review campaigns stored in the marketplace.'
+          : 'Create a campaign brief and set its product category and target follower range.'}
+      action={isBrand ? 'Create campaign' : undefined}
+      onAction={() => { setError(''); setShowForm(true) }}
+    />
 
-      {showForm && <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/40 p-4" onClick={(event) => { if (event.target === event.currentTarget) setShowForm(false) }}>
-        <form onSubmit={createCampaign} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-          <div className="flex items-start justify-between"><div><h2 className="text-base font-semibold text-slate-900">Create campaign</h2><p className="mt-1 text-xs text-slate-500">Start a draft and add collaboration details later.</p></div><button type="button" aria-label="Close form" className="rounded-md p-1 text-slate-400 hover:bg-slate-100" onClick={() => setShowForm(false)}><Icon name="close" size={17} /></button></div>
-          <label className="mt-5 block text-[11px] font-medium text-slate-700">Campaign name<input required maxLength={80} value={campaignName} onChange={(event) => setCampaignName(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 px-3 text-xs outline-none focus:border-violet-400" placeholder="e.g. Autumn collection" /></label>
-          <label className="mt-4 block text-[11px] font-medium text-slate-700">Objective<select required value={objective} onChange={(event) => setObjective(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-violet-400"><option value="">Choose an objective</option><option>Product launch</option><option>Brand awareness</option><option>UGC campaign</option><option>Seasonal collection</option><option>Community stories</option></select></label>
-          <label className="mt-4 block text-[11px] font-medium text-slate-700">Planned budget (USD)<input min="0" step="1" type="number" value={budget} onChange={(event) => setBudget(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 px-3 text-xs outline-none focus:border-violet-400" placeholder="5000" /></label>
-          <div className="mt-6 flex justify-end gap-2"><button type="button" className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600" onClick={() => setShowForm(false)}>Cancel</button><button className="rounded-lg bg-violet-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-violet-700">Save draft</button></div>
-        </form>
-      </div>}
-      <p className="mt-5 text-center text-[10px] text-slate-400">Campaign changes are kept in browser memory for now; persistent storage and APIs will be added with the backend.</p>
-    </>
-  )
+    {error && <p role="alert" className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</p>}
+
+    {loading
+      ? <p className="rounded-xl border border-slate-200/80 bg-white p-10 text-center text-xs text-slate-500">Loading campaigns...</p>
+      : campaigns.length === 0
+        ? <EmptyState
+            title={role === 'Creator' ? 'No open campaigns yet' : 'No campaigns yet'}
+            description={role === 'Brand' ? 'Create your first campaign. It will start as a draft, and you can publish it when it is ready.' : 'Campaigns will appear here after brands create them.'}
+          />
+        : <>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">{campaigns.map((campaign) => <article key={campaign.id} className="rounded-xl border border-slate-200/80 bg-white p-5">
+              <div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate text-sm font-semibold text-slate-900">{campaign.name}</h2>{role !== 'Brand' && campaign.brandName && <p className="mt-1 text-[10px] text-slate-500">{campaign.brandName}</p>}</div><StatusBadge status={campaign.status} /></div>
+              <p className="mt-4 min-h-10 text-xs leading-5 text-slate-600">{campaign.objective}</p>
+              <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-3">
+                <div><dt className="text-[9px] text-slate-400">Product</dt><dd className="mt-1 text-[10px] font-medium text-slate-700">{campaign.productCategory}</dd></div>
+                <div><dt className="text-[9px] text-slate-400">Creator type</dt><dd className="mt-1 text-[10px] font-medium text-violet-700">{campaign.creatorType}</dd></div>
+                <div><dt className="text-[9px] text-slate-400">Follower range</dt><dd className="mt-1 text-[10px] font-medium text-slate-700">{campaign.minFollowers.toLocaleString()}–{campaign.maxFollowers.toLocaleString()}</dd></div>
+                <div><dt className="text-[9px] text-slate-400">Budget</dt><dd className="mt-1 text-[10px] font-medium text-slate-700">{campaign.budget == null ? 'Not set' : campaign.budget.toLocaleString()}</dd></div>
+              </dl>
+              {isBrand && <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">{campaign.status === 'Draft' || campaign.status === 'Paused'
+                ? <button disabled={busyCampaignId === campaign.id} onClick={() => changeStatus(campaign, 'Open')} className="rounded-lg bg-violet-50 px-3 py-2 text-[10px] font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50">Publish campaign</button>
+                : <button disabled={busyCampaignId === campaign.id} onClick={() => changeStatus(campaign, 'Paused')} className="rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Pause campaign</button>}</div>}
+            </article>)}</div>
+            <p className="mt-4 px-1 text-[10px] text-slate-400">{campaigns.length} {campaigns.length === 1 ? 'campaign' : 'campaigns'}</p>
+          </>}
+
+    {showForm && <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-slate-950/40 p-4" onClick={(event) => { if (event.target === event.currentTarget && !saving) setShowForm(false) }}>
+      <form onSubmit={createCampaign} className="my-8 w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between"><div><h2 className="text-base font-semibold">Create campaign</h2><p className="mt-1 text-xs text-slate-500">The product category determines the target creator type.</p></div><button type="button" aria-label="Close form" disabled={saving} className="rounded-md p-1 text-slate-400 hover:bg-slate-100" onClick={() => setShowForm(false)}>×</button></div>
+        <label className="mt-5 block text-[11px] font-medium">Campaign name<input name="name" required minLength="2" maxLength="100" value={form.name} onChange={updateForm} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 px-3 text-xs" /></label>
+        <label className="mt-4 block text-[11px] font-medium">Product category<select name="productCategory" required value={form.productCategory} onChange={updateForm} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs"><option value="">Choose category</option>{campaignCategories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
+        {creatorType && <p className="mt-2 rounded-lg bg-violet-50 px-3 py-2 text-[10px] text-violet-800">Target creator type: <strong>{creatorType}</strong></p>}
+        <label className="mt-4 block text-[11px] font-medium">Campaign brief<textarea name="objective" required minLength="2" maxLength="500" rows="3" value={form.objective} onChange={updateForm} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs" /></label>
+        <div className="mt-4 grid grid-cols-2 gap-3"><label className="text-[11px] font-medium">Minimum followers<input name="minFollowers" required min="0" step="1" type="number" value={form.minFollowers} onChange={updateForm} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 px-3 text-xs" /></label><label className="text-[11px] font-medium">Maximum followers<input name="maxFollowers" required min="0" step="1" type="number" value={form.maxFollowers} onChange={updateForm} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 px-3 text-xs" /></label></div>
+        <label className="mt-4 block text-[11px] font-medium">Budget amount (optional)<input name="budget" min="0" step="0.01" type="number" value={form.budget} onChange={updateForm} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 px-3 text-xs" /></label>
+        {error && <p role="alert" className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</p>}
+        <div className="mt-6 flex justify-end gap-2"><button type="button" disabled={saving} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs" onClick={() => setShowForm(false)}>Cancel</button><button disabled={saving} className="rounded-lg bg-violet-600 px-4 py-2.5 text-xs font-semibold text-white disabled:opacity-60">{saving ? 'Saving...' : 'Save draft'}</button></div>
+      </form>
+    </div>}
+  </>
 }

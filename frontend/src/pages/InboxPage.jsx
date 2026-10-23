@@ -1,72 +1,134 @@
-import { useMemo, useState } from 'react'
-import { conversations as initialConversations } from '../data/demoData.js'
-import { useToast } from '../context/useToast.js'
-import { Avatar, PageHeader } from '../components/ui.jsx'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { apiRequest } from '../api/client.js'
+import { useRole } from '../context/useRole.js'
+import { EmptyState, PageHeader } from '../components/ui.jsx'
 import { Icon } from '../components/Icon.jsx'
 
-const startingMessages = {
-  'thread-1': [
-    { id: 1, sender: 'them', text: 'Hi Olivia! I have the first look for the Summer Edit content ready. Would love your thoughts before I finalize the cut.', time: '10:31 AM' },
-    { id: 2, sender: 'me', text: 'Excited to see it! Please make sure the product details are visible in the first few seconds.', time: '10:36 AM' },
-    { id: 3, sender: 'them', text: 'Just uploaded the first draft for you to review!', time: '10:42 AM' },
-  ],
-  'thread-2': [
-    { id: 1, sender: 'them', text: 'I reviewed the updated brief. The story angle feels like a natural fit for my audience.', time: '9:02 AM' },
-    { id: 2, sender: 'them', text: 'The updated brief looks great. I can get started today.', time: '9:18 AM' },
-  ],
-  'thread-3': [
-    { id: 1, sender: 'them', text: 'Could you confirm the product delivery timeline? I want to plan the shoot for next week.', time: 'Yesterday' },
-  ],
-  'thread-4': [
-    { id: 1, sender: 'them', text: 'Thanks so much! We are excited to get started.', time: 'Yesterday' },
-  ],
-}
-
 export function InboxPage() {
-  const { notify } = useToast()
-  const [threads, setThreads] = useState(initialConversations)
-  const [selectedId, setSelectedId] = useState(initialConversations[0].id)
-  const [search, setSearch] = useState('')
+  const { role, user } = useRole()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [collaborations, setCollaborations] = useState([])
+  const [messages, setMessages] = useState([])
+  const [loading, setLoading] = useState(role !== 'Admin')
+  const [loadingMessages, setLoadingMessages] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState('')
   const [draft, setDraft] = useState('')
-  const [messagesByThread, setMessagesByThread] = useState(startingMessages)
-  const selectedThread = threads.find((thread) => thread.id === selectedId)
-  const visibleThreads = useMemo(() => threads.filter((thread) => `${thread.name} ${thread.campaign} ${thread.message}`.toLowerCase().includes(search.toLowerCase())), [threads, search])
-  const messages = messagesByThread[selectedId] || []
+  const chatScrollRef = useRef(null)
+  const selectedId = searchParams.get('collaboration')
+  const selected = useMemo(() => collaborations.find((item) => item.id === selectedId) || null, [collaborations, selectedId])
+  const isCreator = role === 'Creator'
+  const currentUserId = user?.id
 
-  function selectThread(thread) {
-    setSelectedId(thread.id)
-    setThreads((current) => current.map((item) => item.id === thread.id ? { ...item, unread: 0 } : item))
-  }
+  useEffect(() => {
+    if (role === 'Admin') return undefined
+    let active = true
+    apiRequest('/collaborations')
+      .then(({ collaborations: items }) => { if (active) setCollaborations(items) })
+      .catch((requestError) => { if (active) setError(requestError.message || 'Could not load conversations.') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [role])
 
-  function sendMessage(event) {
+  useEffect(() => {
+    if (loading || role === 'Admin') return
+    const selectedExists = collaborations.some((item) => item.id === selectedId)
+    if (!selectedId && collaborations.length) {
+      setSearchParams({ collaboration: collaborations[0].id }, { replace: true })
+    } else if (selectedId && !selectedExists) {
+      setSearchParams(collaborations.length ? { collaboration: collaborations[0].id } : {}, { replace: true })
+    }
+  }, [collaborations, loading, role, selectedId, setSearchParams])
+
+  useEffect(() => {
+    if (!selectedId || !selected) {
+      setMessages([])
+      return undefined
+    }
+    let active = true
+    let firstLoad = true
+    const loadMessages = async () => {
+      try {
+        const result = await apiRequest(`/collaborations/${selectedId}/messages`)
+        if (!active) return
+        setMessages(result.messages)
+        setError('')
+        if (firstLoad) {
+          requestAnimationFrame(() => {
+            const element = chatScrollRef.current
+            if (element) element.scrollTop = element.scrollHeight
+          })
+          firstLoad = false
+        }
+      } catch (requestError) {
+        if (active) setError(requestError.message || 'Could not load messages.')
+      } finally {
+        if (active) setLoadingMessages(false)
+      }
+    }
+    setLoadingMessages(true)
+    loadMessages()
+    const intervalId = window.setInterval(loadMessages, 5000)
+    return () => { active = false; window.clearInterval(intervalId) }
+  }, [selected, selectedId])
+
+  async function sendMessage(event) {
     event.preventDefault()
-    const text = draft.trim()
-    if (!text || !selectedThread) return
-    const time = new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date())
-    setMessagesByThread((current) => ({ ...current, [selectedId]: [...(current[selectedId] || []), { id: Date.now(), sender: 'me', text, time }] }))
-    setThreads((current) => current.map((thread) => thread.id === selectedId ? { ...thread, message: text, time: 'Now' } : thread))
-    setDraft('')
+    if (!selected || !draft.trim()) return
+    setError('')
+    setSending(true)
+    try {
+      const { message } = await apiRequest(`/collaborations/${selected.id}/messages`, {
+        method: 'POST',
+        body: { content: draft },
+      })
+      setMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message])
+      setDraft('')
+      requestAnimationFrame(() => {
+        const element = chatScrollRef.current
+        if (element) element.scrollTop = element.scrollHeight
+      })
+    } catch (requestError) {
+      setError(requestError.message || 'Could not send your message.')
+    } finally {
+      setSending(false)
+    }
   }
 
-  return (
-    <>
-      <PageHeader eyebrow="Messages" title="Inbox" description="Keep brand and creator conversations connected to their collaborations." action="New message" onAction={() => notify('New conversations can be started from a matched profile.')} />
-      <section className="grid min-h-[590px] overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.025)] lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className={`border-b border-slate-100 lg:border-b-0 lg:border-r ${selectedId ? 'hidden lg:block' : 'block'}`}>
-          <div className="border-b border-slate-100 p-4"><h2 className="text-sm font-semibold text-slate-900">Conversations</h2><label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3"><Icon name="search" size={14} className="text-slate-400" /><input aria-label="Search conversations" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search messages..." className="w-full bg-transparent text-[11px] outline-none placeholder:text-slate-400" /></label></div>
-          <div className="divide-y divide-slate-100">{visibleThreads.map((thread) => <button key={thread.id} onClick={() => selectThread(thread)} className={`flex w-full gap-3 px-4 py-4 text-left transition hover:bg-slate-50 ${selectedId === thread.id ? 'bg-violet-50/60' : ''}`}>
-            <Avatar initials={thread.avatar} color={thread.color} size="h-10 w-10" /><div className="min-w-0 flex-1"><div className="flex justify-between gap-2"><p className="truncate text-xs font-semibold text-slate-800">{thread.name}</p><span className="shrink-0 text-[9px] text-slate-400">{thread.time}</span></div><p className="mt-1 text-[9px] text-violet-700">{thread.campaign}</p><p className="mt-1 truncate text-[10px] text-slate-500">{thread.message}</p></div>{thread.unread > 0 && <span className="mt-5 h-2 w-2 shrink-0 rounded-full bg-violet-500" />}
-          </button>)}</div>
-          {visibleThreads.length === 0 && <p className="p-5 text-center text-xs text-slate-500">No conversations found.</p>}
-        </aside>
+  const otherParty = selected ? (isCreator ? selected.brand : selected.creator) : null
 
-        {selectedThread ? <div className={`flex min-h-[590px] flex-col ${selectedId ? 'flex' : 'hidden lg:flex'}`}>
-          <header className="flex items-center gap-3 border-b border-slate-100 px-4 py-3.5 sm:px-5"><button className="mr-1 rounded-md p-1 text-slate-500 hover:bg-slate-100 lg:hidden" aria-label="Back to conversations" onClick={() => setSelectedId('')}><span aria-hidden="true">←</span></button><Avatar initials={selectedThread.avatar} color={selectedThread.color} size="h-9 w-9" /><div className="min-w-0 flex-1"><h2 className="text-xs font-semibold text-slate-800">{selectedThread.name}</h2><p className="mt-0.5 text-[10px] text-slate-500">{selectedThread.handle} · {selectedThread.campaign}</p></div><button aria-label="More conversation options" className="rounded-md p-2 text-slate-400 hover:bg-slate-100" onClick={() => notify('Conversation options are not connected yet.')}><Icon name="more" size={17} /></button></header>
-          <div className="flex-1 space-y-4 overflow-y-auto bg-[#fcfcfe] p-4 sm:p-6">{messages.map((message) => <div key={message.id} className={`flex ${message.sender === 'me' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[82%] rounded-2xl px-4 py-3 sm:max-w-[70%] ${message.sender === 'me' ? 'rounded-br-md bg-violet-600 text-white' : 'rounded-bl-md border border-slate-100 bg-white text-slate-700'}`}><p className="text-xs leading-5">{message.text}</p><p className={`mt-1.5 text-right text-[9px] ${message.sender === 'me' ? 'text-violet-200' : 'text-slate-400'}`}>{message.time}</p></div></div>)}</div>
-          <form className="border-t border-slate-100 bg-white p-3 sm:p-4" onSubmit={sendMessage}><div className="flex items-end gap-2 rounded-xl border border-slate-200 bg-white p-2 focus-within:border-violet-300"><textarea aria-label="Message text" rows="2" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form.requestSubmit() } }} placeholder="Write a message..." className="max-h-28 min-h-10 flex-1 resize-y bg-transparent px-2 py-1 text-xs outline-none placeholder:text-slate-400" /><button aria-label="Send message" disabled={!draft.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-600 text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"><Icon name="send" size={16} /></button></div><p className="mt-2 px-1 text-[9px] text-slate-400">Enter to send · Shift + Enter for a new line</p></form>
-        </div> : <div className="hidden items-center justify-center text-xs text-slate-400 lg:flex">Select a conversation to view messages.</div>}
-      </section>
-      <p className="mt-4 text-center text-[10px] text-slate-400">Messages are held in frontend state only. Real-time delivery and persistence require the messaging backend.</p>
-    </>
-  )
+  return <>
+    <PageHeader eyebrow="Messages" title={role === 'Admin' ? 'Support inbox' : 'Inbox'} description={role === 'Admin' ? 'Campaign conversations are private to their Brand and Creator participants.' : 'Talk directly with the other participant in an active collaboration.'} />
+    {error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">{error}</p>}
+    {role === 'Admin'
+      ? <EmptyState title="Participant conversations are private" description="Admin support conversations are not part of the campaign messaging workflow." />
+      : loading
+        ? <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">Loading your conversations...</div>
+        : collaborations.length === 0
+          ? <EmptyState title="No conversations yet" description="A conversation becomes available when a Brand accepts your campaign application and the collaboration starts." />
+          : <section className="grid min-h-[620px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid-cols-[280px_minmax(0,1fr)]">
+              <aside className="border-b border-slate-100 bg-[#fffefa] p-3 lg:border-b-0 lg:border-r">
+                <p className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">Collaborations</p>
+                <nav className="space-y-1">{collaborations.map((item) => {
+                  const person = isCreator ? item.brand : item.creator
+                  const active = item.id === selectedId
+                  return <button key={item.id} onClick={() => { setError(''); setSearchParams({ collaboration: item.id }) }} className={`w-full rounded-xl px-3 py-3 text-left transition ${active ? 'bg-violet-50 text-violet-950' : 'text-slate-700 hover:bg-slate-50'}`}>
+                    <span className="block truncate text-xs font-semibold">{person?.name || 'Conversation'}</span>
+                    <span className="mt-1 block truncate text-[11px] text-slate-500">{item.campaign?.name || 'Campaign'}</span>
+                  </button>
+                })}</nav>
+              </aside>
+              {selected ? <div className="flex min-h-[620px] min-w-0 flex-col">
+                <header className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6"><div className="min-w-0"><p className="truncate text-sm font-bold text-slate-900">{otherParty?.name || 'Conversation'}</p><p className="mt-1 truncate text-xs text-slate-500">{selected.campaign?.name}</p></div>{otherParty?.id && <Link to={`/profiles/${otherParty.id}`} className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-[11px] font-semibold text-violet-700 hover:bg-violet-50">View profile</Link>}</header>
+                <div ref={chatScrollRef} aria-live="polite" className="flex-1 space-y-3 overflow-y-auto bg-[#faf9fc] px-4 py-5 sm:px-6">
+                  {loadingMessages && messages.length === 0 ? <p className="py-10 text-center text-xs text-slate-400">Loading messages...</p> : messages.length === 0 ? <p className="py-10 text-center text-xs text-slate-400">This is the start of your conversation. Say hello!</p> : messages.map((message) => {
+                    const mine = message.sender?.id === currentUserId
+                    return <div key={message.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[85%] rounded-2xl px-4 py-3 sm:max-w-[72%] ${mine ? 'rounded-br-md bg-violet-600 text-white' : 'rounded-bl-md border border-slate-200 bg-white text-slate-800'}`}><p className={`mb-1 text-[10px] font-semibold ${mine ? 'text-violet-100' : 'text-violet-700'}`}>{mine ? 'You' : message.sender?.name || otherParty?.name}</p><p className="whitespace-pre-wrap break-words text-sm leading-5">{message.content}</p><p className={`mt-2 text-right text-[9px] ${mine ? 'text-violet-200' : 'text-slate-400'}`}>{new Date(message.createdAt).toLocaleString()}</p></div></div>
+                  })}
+                </div>
+                <form onSubmit={sendMessage} className="border-t border-slate-100 bg-white p-3 sm:p-4"><label className="sr-only" htmlFor="chat-message">Write a message</label><div className="flex items-end gap-2"><textarea id="chat-message" rows="2" maxLength="2000" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Write a message..." className="max-h-36 min-h-12 flex-1 resize-y rounded-xl border border-slate-200 px-3 py-2.5 text-sm leading-5" /><button disabled={sending || !draft.trim() || selected.status !== 'In progress'} aria-label="Send message" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"><Icon name="send" size={17} /></button></div><p className="mt-2 px-1 text-[10px] text-slate-400">Messages refresh automatically every few seconds.</p></form>
+              </div> : <div className="grid min-h-[620px] place-items-center text-sm text-slate-400">Select a conversation</div>}
+            </section>}
+  </>
 }

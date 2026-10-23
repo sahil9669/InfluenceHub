@@ -1,81 +1,79 @@
-import { useNavigate } from 'react-router-dom'
-import { creatorProfiles, campaigns } from '../data/demoData.js'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { apiRequest } from '../api/client.js'
 import { useRole } from '../context/useRole.js'
-import { useToast } from '../context/useToast.js'
-import { Avatar, PageHeader, SectionHeading, StatCard, StatusBadge } from '../components/ui.jsx'
 import { Icon } from '../components/Icon.jsx'
-
-const metrics = {
-  Brand: [
-    { label: 'Active collaborations', value: '12', change: '+2 this month', icon: 'campaigns', color: 'violet' },
-    { label: 'Total creator reach', value: '2.4M', change: '+18.6% this month', icon: 'analytics', color: 'blue' },
-    { label: 'Avg. engagement rate', value: '6.8%', change: '+0.8% this month', icon: 'sparkles', color: 'green' },
-    { label: 'Campaign investment', value: '$18,450', change: 'Across 8 campaigns', icon: 'overview', color: 'amber' },
-  ],
-  Creator: [
-    { label: 'Active collaborations', value: '4', change: '2 due this week', icon: 'campaigns', color: 'violet' },
-    { label: 'Profile reach', value: '84.2K', change: '+12.4% this month', icon: 'analytics', color: 'blue' },
-    { label: 'Engagement rate', value: '7.2%', change: 'Top 8% in your niche', icon: 'sparkles', color: 'green' },
-    { label: 'Pending invitations', value: '6', change: '3 are a great fit', icon: 'inbox', color: 'amber' },
-  ],
-  Admin: [
-    { label: 'Total members', value: '18,492', change: '+8.2% this month', icon: 'overview', color: 'violet' },
-    { label: 'Active collaborations', value: '1,284', change: '+14.6% this month', icon: 'campaigns', color: 'blue' },
-    { label: 'Successful matches', value: '92.4%', change: '+3.1% this month', icon: 'sparkles', color: 'green' },
-    { label: 'Open support cases', value: '24', change: '8 need attention', icon: 'inbox', color: 'amber' },
-  ],
-}
-
-const greeting = {
-  Brand: ['Good morning, Olivia', "Here's what's happening with your creator partnerships."],
-  Creator: ['Your creator space, Sofia', 'A snapshot of your opportunities and active collaborations.'],
-  Admin: ['Platform overview', 'Monitor marketplace health, activity, and member growth.'],
-}
+import { Avatar, EmptyState, PageHeader } from '../components/ui.jsx'
 
 export function DashboardPage() {
-  const { role } = useRole()
-  const { notify } = useToast()
+  const { role, user } = useRole()
   const navigate = useNavigate()
-  const [title, description] = greeting[role]
-  const recommended = creatorProfiles.slice(0, 3)
+  const [profile, setProfile] = useState(null)
+  const [campaigns, setCampaigns] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const creator = role === 'Creator'
+  const admin = role === 'Admin'
+  const title = admin ? 'Platform overview' : creator ? 'Your creator workspace' : 'Your brand workspace'
+  const description = admin
+    ? 'A clear view of marketplace activity and your platform tools.'
+    : creator
+      ? 'Find campaigns that fit your content and keep your creator profile ready to be discovered.'
+      : 'Build campaigns and find creators who fit your brand.'
+  const action = admin ? 'Manage members' : creator ? 'Explore campaigns' : 'Create a campaign'
+  const destination = admin ? '/members' : creator ? '/discover' : '/campaigns'
+  const name = user?.name || 'there'
+  const initials = name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()
 
-  return (
-    <>
-      <PageHeader eyebrow={`${role} dashboard`} title={title} description={description} action={role === 'Creator' ? 'Share profile' : role === 'Admin' ? 'Invite member' : 'Create campaign'} onAction={() => role === 'Creator' ? notify('Profile sharing will be connected to your account.') : role === 'Admin' ? notify('Member invitations will be connected to the backend.') : navigate('/campaigns')} />
-      <section aria-label="Key metrics" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">{metrics[role].map((metric) => <StatCard key={metric.label} {...metric} />)}</section>
+  useEffect(() => {
+    let active = true
+    const requests = [apiRequest('/campaigns')]
+    if (!admin) requests.push(apiRequest('/profiles/me'))
+    Promise.all(requests)
+      .then(([campaignResult, profileResult]) => {
+        if (!active) return
+        setCampaigns(campaignResult.campaigns || [])
+        setProfile(profileResult?.profile || null)
+      })
+      .catch((requestError) => {
+        if (active) setError(requestError.message || 'Could not load your workspace.')
+      })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [admin])
 
-      <section className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[1.55fr_1fr]">
-        <article className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.025)] sm:p-6">
-          <SectionHeading title={role === 'Creator' ? 'Brands that get your vibe' : role === 'Admin' ? 'Marketplace pulse' : 'Creators picked for you'} description={role === 'Creator' ? 'Recommended brand partnerships based on your creator profile.' : role === 'Admin' ? 'A snapshot of recent platform activity.' : 'AI match scores tailored to your campaign and audience.'} action="Explore all" onAction={() => navigate('/discover')} />
-          <div className="divide-y divide-slate-100">
-            {recommended.map((person) => <div className="flex items-center gap-3 py-3 first:pt-0 last:pb-0" key={person.id}>
-              <Avatar initials={person.avatar} color={person.color} />
-              <div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline gap-x-2"><p className="text-xs font-semibold text-slate-800">{person.name}</p><span className="text-[10px] text-slate-400">{person.handle}</span></div><p className="mt-1 text-[10px] text-slate-500">{person.niche} <span className="mx-1 text-slate-300">·</span>{person.followers.toLocaleString()} followers</p></div>
-              <div className="text-right"><p className="text-xs font-semibold text-slate-800">{person.score}%</p><p className="mt-0.5 text-[9px] font-medium text-emerald-600">match</p></div>
-              <button aria-label={`View ${person.name}`} className="ml-1 rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-violet-700" onClick={() => navigate('/discover')}><Icon name="arrow" size={14} /></button>
-            </div>)}
-          </div>
-          <div className="mt-5 flex items-center gap-2 rounded-lg bg-violet-50/70 px-3 py-2.5 text-[10px] text-violet-800"><Icon name="sparkles" size={14} className="shrink-0 text-violet-600" /><span><strong className="font-semibold">AI-powered recommendations.</strong> Match scores can later be supplied by your recommendation service.</span></div>
-        </article>
+  const profileLabel = admin ? 'Platform account' : profile ? 'Profile saved' : 'Finish your profile'
+  const nextStep = admin
+    ? 'Review marketplace activity and manage accounts from your admin tools.'
+    : profile
+      ? creator ? `Your profile is ready${profile.influencerType ? ` · ${profile.influencerType}` : ''}.` : `Your brand profile is ready${profile.organizationName ? ` · ${profile.organizationName}` : ''}.`
+      : creator ? 'Add your creator type and public details so brands can learn about you.' : 'Add your organization details so creators can learn about your brand.'
 
-        <article className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.025)] sm:p-6">
-          <SectionHeading title="Collaboration progress" description="Follow work from match through deliverables." action="View all" onAction={() => navigate(role === 'Creator' ? '/collaborations' : '/campaigns')} />
-          <div className="rounded-lg border border-slate-100 bg-slate-50/70 p-3.5"><div className="flex items-center justify-between text-[10px]"><span className="font-semibold text-slate-700">{role === 'Creator' ? 'Summer Edit · Studio North' : 'Summer Edit campaign'}</span><span className="font-semibold text-violet-700">68%</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full w-[68%] rounded-full bg-violet-500" /></div></div>
-          <ol className="mt-4 space-y-4">{[['Campaign brief', 'Completed', true], ['Creator matching', 'Completed', true], ['Content in progress', '3 creators working', false], ['Review & publish', 'Up next', false]].map(([step, status, complete], index) => <li key={step} className="relative flex gap-3"><span className={`flex h-[23px] w-[23px] shrink-0 items-center justify-center rounded-full ${complete ? 'bg-emerald-100 text-emerald-700' : index === 2 ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-400'}`}><Icon name={complete ? 'check' : 'clock'} size={12} /></span><div className="flex flex-1 items-center justify-between gap-2 pt-0.5"><p className="text-[11px] font-medium text-slate-700">{step}</p><p className={`text-right text-[10px] ${complete ? 'text-emerald-600' : 'text-slate-400'}`}>{status}</p></div></li>)}</ol>
-        </article>
+  return <>
+    <PageHeader eyebrow={`${role} dashboard`} title={title} description={description} action={action} onAction={() => navigate(destination)} />
+    <section className="relative overflow-hidden rounded-[1.5rem] bg-gradient-to-br from-[#282044] via-[#3c3067] to-[#6453b8] p-6 text-white shadow-xl shadow-violet-950/10 sm:p-9">
+      <div aria-hidden="true" className="pointer-events-none absolute -right-12 -top-24 h-72 w-72 rounded-full border border-white/10 bg-white/[0.04]" />
+      <div aria-hidden="true" className="pointer-events-none absolute right-20 top-24 h-40 w-40 rounded-full border border-white/10" />
+      <div className="relative grid gap-7 lg:grid-cols-[1.4fr_0.8fr] lg:items-end">
+        <div><p className="text-xs font-semibold text-violet-200">Welcome back, {name}</p><h2 className="mt-3 max-w-xl font-display text-2xl font-semibold tracking-tight sm:text-3xl">{creator ? 'Make your next partnership count.' : admin ? 'The marketplace, at a glance.' : 'Great partnerships start with a great brief.'}</h2><p className="mt-3 max-w-xl text-sm leading-6 text-violet-100/80">{creator ? 'Browse open campaigns and find a brief that feels right for your audience.' : admin ? 'Keep track of the campaigns and accounts using InfluenceHub.' : 'Create a campaign, set the audience you want to reach, and find creators who fit.'}</p>
+          <Link to={destination} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-semibold text-[#3d306b] shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg">{action}<Icon name="arrow" size={15} /></Link>
+        </div>
+        <div className="rounded-2xl border border-white/15 bg-white/[0.09] p-5 backdrop-blur-sm"><div className="flex items-center gap-3"><Avatar initials={initials} color="bg-white text-violet-800" size="h-11 w-11" /><div className="min-w-0"><p className="truncate text-sm font-semibold">{name}</p><p className="mt-0.5 text-xs text-violet-200">{user?.email}</p></div></div><div className="mt-5 border-t border-white/15 pt-4"><div className="flex items-center justify-between gap-3"><span className="text-xs text-violet-100">{profileLabel}</span><span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold text-white">{loading ? 'Loading' : profile ? 'Ready' : admin ? 'Admin' : 'Action needed'}</span></div><p className="mt-2 text-xs leading-5 text-violet-100/75">{nextStep}</p>{!admin && <Link className="mt-3 inline-block text-xs font-semibold text-white underline decoration-white/40 underline-offset-4 hover:decoration-white" to="/settings">{profile ? 'Edit profile' : 'Complete profile'} →</Link>}</div></div>
+      </div>
+    </section>
+
+    {error && <p role="alert" className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">{error}</p>}
+
+    <section className="mt-7 grid gap-4 sm:grid-cols-2">
+      <article className="surface-card flex items-center gap-4 rounded-2xl border bg-white p-5"><span className="flex h-11 w-11 items-center justify-center rounded-xl bg-violet-50 text-violet-700"><Icon name="campaigns" size={19} /></span><div><p className="text-xs text-slate-500">{creator ? 'Open campaigns' : admin ? 'Marketplace campaigns' : 'Your campaigns'}</p><p className="mt-1 font-display text-2xl font-bold tracking-tight text-slate-900">{loading ? '—' : campaigns.length}</p></div><Link to={creator ? '/discover' : '/campaigns'} className="ml-auto text-xs font-semibold text-violet-700 hover:text-violet-900">View <span aria-hidden="true">→</span></Link></article>
+      {!admin && <article className="surface-card flex items-center gap-4 rounded-2xl border bg-white p-5"><span className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-700"><Icon name="sparkles" size={19} /></span><div><p className="text-xs text-slate-500">Marketplace profile</p><p className="mt-1 font-display text-base font-bold tracking-tight text-slate-900">{loading ? 'Loading…' : profile ? 'Looking good' : 'Needs a little love'}</p></div><Link to="/settings" className="ml-auto text-xs font-semibold text-violet-700 hover:text-violet-900">{profile ? 'Edit' : 'Set up'} <span aria-hidden="true">→</span></Link></article>}
+    </section>
+
+    <div className="mt-7 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+      <section className="surface-card rounded-2xl border bg-white p-5 sm:p-6"><div className="flex items-center justify-between"><div><h2 className="font-display text-sm font-bold text-slate-900">{creator ? 'Campaigns to explore' : 'Campaign activity'}</h2><p className="mt-1 text-xs text-slate-500">{creator ? 'Published opportunities from brands.' : 'Your latest campaign workspace.'}</p></div><Link to={creator ? '/discover' : '/campaigns'} className="text-xs font-semibold text-violet-700">See all →</Link></div>
+        {loading ? <p className="py-8 text-center text-xs text-slate-500">Loading your campaigns…</p> : campaigns.length ? <div className="mt-4 divide-y divide-slate-100">{campaigns.slice(0, 3).map((campaign) => <div key={campaign.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-800">{campaign.name}</p><p className="mt-1 truncate text-[11px] text-slate-500">{creator ? campaign.brandName : campaign.productCategory}</p></div><span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">{campaign.status}</span></div>)}</div> : <div className="mt-4"><EmptyState title={creator ? 'No open campaigns yet' : 'No campaigns yet'} description={creator ? 'When a brand publishes a campaign, it will show up here.' : 'Create your first campaign and it will appear here.'} /></div>}
       </section>
-
-      <section className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[1.55fr_1fr]">
-        <article className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.025)]">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-6"><div><h2 className="text-sm font-semibold tracking-tight">{role === 'Creator' ? 'Recent collaborations' : role === 'Admin' ? 'Platform campaigns' : 'Recent campaigns'}</h2><p className="mt-1 text-[10px] text-slate-500">Campaign status, creator participation, and reach.</p></div><button className="text-[10px] font-semibold text-violet-700" onClick={() => navigate(role === 'Creator' ? '/collaborations' : '/campaigns')}>{role === 'Creator' ? 'All collaborations' : 'All campaigns'} →</button></div>
-          <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-left"><thead><tr className="bg-slate-50/70 text-[9px] font-semibold uppercase tracking-[0.11em] text-slate-400"><th className="px-6 py-3">Campaign</th><th className="px-4 py-3">Creators</th><th className="px-4 py-3">Reach</th><th className="px-6 py-3">Status</th></tr></thead><tbody className="divide-y divide-slate-100">{campaigns.slice(0, 3).map((campaign) => <tr key={campaign.id} className="hover:bg-slate-50/60"><td className="px-6 py-3.5"><p className="text-[11px] font-semibold text-slate-800">{campaign.name}</p><p className="mt-1 text-[9px] text-slate-400">{campaign.objective}</p></td><td className="px-4 py-3.5 text-[10px] text-slate-600">{campaign.creators}</td><td className="px-4 py-3.5 text-[10px] font-medium text-slate-700">{campaign.reach}</td><td className="px-6 py-3.5"><StatusBadge status={campaign.status} /></td></tr>)}</tbody></table></div>
-        </article>
-        <article className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.025)] sm:p-6">
-          <SectionHeading title="Recent activity" description="The latest updates from your workspace." />
-          <div className="space-y-4">{[['New creator application', 'Sofia Chen applied to Summer Edit', '12 min ago'], ['Milestone completed', 'First draft received from Marcus Cole', '1 hour ago'], ['New message', 'Amara sent you a message', '3 hours ago']].map(([titleText, detail, time], index) => <div key={titleText} className="flex gap-3"><span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${index === 1 ? 'bg-emerald-100 text-emerald-700' : index === 2 ? 'bg-sky-100 text-sky-700' : 'bg-violet-100 text-violet-700'}`}><Icon name={index === 1 ? 'check' : 'inbox'} size={14} /></span><div className="min-w-0 flex-1"><p className="text-[11px] font-semibold text-slate-700">{titleText}</p><p className="mt-1 text-[10px] leading-4 text-slate-500">{detail}</p><p className="mt-1.5 text-[9px] text-slate-400">{time}</p></div></div>)}</div>
-          <button className="mt-5 w-full rounded-lg border border-slate-200 py-2.5 text-[10px] font-semibold text-slate-600 transition hover:bg-slate-50" onClick={() => navigate('/inbox')}>Open inbox</button>
-        </article>
-      </section>
-    </>
-  )
+      <section className="rounded-2xl border border-[#e8e4dc] bg-[#f0ede7] p-5 sm:p-6"><p className="text-[10px] font-bold uppercase tracking-[0.15em] text-violet-700">Quick start</p><h2 className="mt-2 font-display text-base font-bold text-slate-900">{creator ? 'Get discovered by brands' : 'Set up for better matches'}</h2><p className="mt-2 text-xs leading-5 text-slate-600">{creator ? 'Keep your category, bio, and Instagram username up to date.' : 'A clear campaign category and follower range help surface relevant creators.'}</p><Link to={creator ? '/settings' : '/campaigns'} className="mt-5 inline-flex items-center gap-2 rounded-xl border border-white bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-800 shadow-sm hover:text-violet-700">{creator ? 'Review creator profile' : 'Open campaigns'}<Icon name="arrow" size={14} /></Link></section>
+    </div>
+  </>
 }

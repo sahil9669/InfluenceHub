@@ -1,23 +1,37 @@
-import { useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import { RoleContext } from './RoleContext.js'
-
-const availableRoles = ['Brand', 'Creator', 'Admin']
+import { apiRequest } from '../api/client.js'
 
 export function RoleProvider({ children }) {
-  const [role, setRole] = useState(() => {
-    const savedRole = window.localStorage.getItem('influencehub-role')
-    return availableRoles.includes(savedRole) ? savedRole : 'Brand'
-  })
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
 
-  function selectRole(nextRole) {
-    if (!availableRoles.includes(nextRole)) {
-      throw new Error(`Unsupported InfluenceHub role: ${nextRole}`)
-    }
-    window.localStorage.setItem('influencehub-role', nextRole)
-    setRole(nextRole)
+  useEffect(() => {
+    let active = true
+    apiRequest('/auth/me')
+      .then(({ user: currentUser }) => { if (active) setUser(currentUser) })
+      .catch(() => { if (active) setUser(null) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+
+  async function login(credentials) {
+    const result = await apiRequest('/auth/login', { method: 'POST', body: credentials })
+    setUser(result.user)
+    return result.user
   }
 
-  const value = useMemo(() => ({ role, setRole: selectRole }), [role])
+  async function register(details) {
+    const result = await apiRequest('/auth/register', { method: 'POST', body: details })
+    setUser(result.user)
+    return result.user
+  }
 
+  async function logout() {
+    try { await apiRequest('/auth/logout', { method: 'POST' }) }
+    finally { setUser(null) }
+  }
+
+  const value = useMemo(() => ({ user, role: user?.role || null, loading, login, register, logout }), [user, loading])
   return <RoleContext.Provider value={value}>{children}</RoleContext.Provider>
 }
